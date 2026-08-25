@@ -23,11 +23,26 @@ really is the picture at 90 seconds.
 
 ## Using it
 
+**Easiest way:** double-click **Video Analyzer** (the shortcut with the purple
+film icon). It asks you to paste the link, does the work, and opens the folder of
+frames when it's finished.
+
+If the shortcut is missing — it isn't stored in the repo, because a shortcut
+remembers the exact folder it was made in — recreate it:
+
+```bash
+powershell -ExecutionPolicy Bypass -File assets\make_shortcut.ps1 -Desktop
+```
+
+Leave off `-Desktop` if you don't want a copy on your desktop.
+
+**From a terminal:**
+
 ```bash
 python extract.py https://www.youtube.com/watch?v=jNQXAC9IVRw
 ```
 
-That's it. You'll see it download, then count out the frames, then tell you where
+Either way you'll see it download, then count out the frames, then tell you where
 it put them.
 
 ### What you get
@@ -71,6 +86,18 @@ It aims for about 30 frames per video and picks the gap from a fixed list —
 
 Anything up to half an hour gives you 30 frames or fewer. Longer than that and
 the count climbs, because 60 seconds is the biggest gap available.
+
+## The icon
+
+`assets/icon.ico` is generated, not hand-drawn. To change it, edit
+`assets/make_icon.py` and run:
+
+```bash
+python assets/make_icon.py
+```
+
+That needs Pillow (`pip install Pillow`). It writes the `.ico` at every size
+Windows asks for, plus `icon-preview.png` so you can see it large.
 
 ## If something goes wrong
 
