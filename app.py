@@ -19,7 +19,19 @@ import threading
 import traceback
 from pathlib import Path
 
-ROOT = Path(__file__).parent.resolve()
+def _app_dir():
+    """The .exe's folder once packaged, this folder when run from source."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent.resolve()
+    return Path(__file__).parent.resolve()
+
+
+def _resource_dir():
+    bundled = getattr(sys, "_MEIPASS", None)
+    return Path(bundled).resolve() if bundled else Path(__file__).parent.resolve()
+
+
+ROOT = _app_dir()
 LOG = ROOT / "debug.log"
 
 WINDOW_TITLE = "Video Analyzer"
@@ -58,7 +70,7 @@ def set_window_icon():
     64-bit handles, which is how a nearly identical block crashed this app once
     already. If anything here looks off, delete the call rather than guessing.
     """
-    icon_path = ROOT / "assets" / "icon.ico"
+    icon_path = _resource_dir() / "assets" / "icon.ico"
     if not icon_path.is_file():
         return
     try:
@@ -104,8 +116,47 @@ def taskbar_identity():
         pass
 
 
+def webview2_missing():
+    """
+    True when the Edge WebView2 runtime is absent.
+
+    It ships with Windows 11 and with any recent Edge, so this almost never
+    fires - but if it does, the window would fail to open with no explanation
+    at all, which is the one thing a non-technical user cannot recover from.
+    """
+    import winreg
+
+    key = r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    for root, path in (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node" + key[len("SOFTWARE"):]),
+        (winreg.HKEY_LOCAL_MACHINE, key),
+        (winreg.HKEY_CURRENT_USER, key),
+    ):
+        try:
+            with winreg.OpenKey(root, path) as handle:
+                version, _ = winreg.QueryValueEx(handle, "pv")
+                if version and version != "0.0.0.0":
+                    return False
+        except OSError:
+            continue
+    return True
+
+
 def main():
     taskbar_identity()
+
+    try:
+        if webview2_missing():
+            fatal(
+                "This app needs the Microsoft Edge WebView2 runtime, which is "
+                "not on this computer.\n\n"
+                "It is a free Microsoft download. Get the "
+                '"Evergreen Standalone Installer" from:\n'
+                "https://developer.microsoft.com/microsoft-edge/webview2/\n\n"
+                "Install it, then open Video Analyzer again."
+            )
+    except Exception as exc:            # a broken registry must not block startup
+        log(f"could not check for WebView2 (continuing anyway): {exc}")
 
     try:
         import webview

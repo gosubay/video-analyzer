@@ -207,6 +207,48 @@ when the window will not open.
 
 ---
 
+## The shareable release (added 2026-08-25)
+
+### 13. How it is packaged
+`build_exe.bat` -> PyInstaller (`VideoAnalyzer.spec`) -> `release/make_zip.py`.
+Output: `release/VideoAnalyzer-v1.0-windows.zip`, about 184 MB.
+
+**One-folder, never one-file.** A one-file build re-extracts ~450 MB of FFmpeg
+into a temp folder on every launch, which reads as a frozen app.
+
+**FFmpeg and ffprobe are bundled** so the recipient installs nothing. They go in
+via `datas`, not `binaries` - they are self-contained executables and letting
+PyInstaller scan them for dependencies is slow and pointless.
+
+The two binaries are ~217 MB each because the winget `full_build` is statically
+linked. A `full-shared` build (tiny exes plus shared DLLs) would cut the release
+to roughly a third. Swap by dropping `ffmpeg.exe`/`ffprobe.exe` and their DLLs
+into `bin/` next to the spec - it prefers that folder over the PATH.
+
+### 14. Frozen vs source paths
+Two different roots, and mixing them up is the classic packaging bug:
+
+- `core.app_dir()` - the .exe's own folder. Things the user must be able to
+  find: `frames/`, `debug.log`, the bundled `bin/`.
+- `core.resource_dir()` - PyInstaller's unpack folder (`_internal`). Read-only
+  things we ship: `ui/`, `assets/`.
+
+`core.tool_path()` checks both, so ffmpeg is found wherever it ends up.
+
+### 15. What the recipient needs
+Nothing. Verified by running the built exe with FFmpeg stripped out of `PATH`:
+it found its own copy and completed a full download and extraction.
+
+Two caveats that are not bugs:
+- **SmartScreen** shows "Windows protected your PC" for any unsigned exe. Fixing
+  that needs a code-signing certificate (a few hundred dollars a year). The
+  bundled `README.txt` explains the More info -> Run anyway click.
+- **Edge WebView2** is required. Windows 11 always has it; a stale Windows 10
+  might not. `app.py` checks the registry at startup and shows a message box
+  with the Microsoft download link rather than failing silently.
+
+---
+
 ## Dependencies
 - Python 3.13
 - `yt-dlp` (pip)

@@ -10,9 +10,11 @@ per-frame seeking - is documented in CLAUDE.md. Do not diverge from it here.
 
 import datetime as _dt
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unicodedata
@@ -69,9 +71,56 @@ class Job:
 _NULL_JOB = Job()
 
 
+# ---------------------------------------------------------------- finding ffmpeg
+def app_dir():
+    """
+    The folder the app lives in - the .exe's folder in a built release, or this
+    source folder otherwise. Used for things the user should be able to see:
+    the bundled ffmpeg, the frames output, the log.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def resource_dir():
+    """
+    Where read-only files we ship (ui/, assets/) actually sit. PyInstaller
+    unpacks those somewhere of its own choosing, which is NOT app_dir().
+    """
+    bundled = getattr(sys, "_MEIPASS", None)
+    return Path(bundled) if bundled else Path(__file__).parent
+
+
+def tool_path(name):
+    """
+    Locate ffmpeg or ffprobe: our own bundled copy first, then the machine's.
+
+    A packaged release ships both binaries in bin/ next to the .exe, so a friend
+    who has never heard of FFmpeg does not have to install anything.
+    """
+    exe = f"{name}.exe" if os.name == "nt" else name
+    places = (
+        app_dir() / "bin" / exe,        # sitting beside the .exe
+        app_dir() / exe,
+        resource_dir() / "bin" / exe,   # tucked inside the bundle
+        resource_dir() / exe,
+    )
+    for candidate in places:
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(name)
+
+
+def ffmpeg_dir():
+    """The folder holding ffmpeg, for handing to yt-dlp so it can merge audio."""
+    found = tool_path("ffmpeg")
+    return str(Path(found).parent) if found else None
+
+
 # ---------------------------------------------------------------- small helpers
 def which_or_die(name, install_hint):
-    path = shutil.which(name)
+    path = tool_path(name)
     if not path:
         raise ExtractError(f"{name} is not installed or not on your PATH. {install_hint}")
     return path
@@ -79,7 +128,7 @@ def which_or_die(name, install_hint):
 
 def missing_tools():
     """Names of required programs that are not installed. Empty list means good."""
-    return [name for name in ("ffmpeg", "ffprobe") if not shutil.which(name)]
+    return [name for name in ("ffmpeg", "ffprobe") if not tool_path(name)]
 
 
 def choose_interval(duration):
@@ -232,7 +281,7 @@ def probe_duration(video_path):
 
 
 def probe_dimensions(video_path):
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = tool_path("ffprobe")
     if not ffprobe:
         return None, None
     cmd = [
@@ -352,6 +401,9 @@ def download(url, workdir, on_progress=None, job=_NULL_JOB):
         "logger": _SilentLogger(),
         "no_color": True,
     }
+    located = ffmpeg_dir()
+    if located:
+        opts["ffmpeg_location"] = located
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:

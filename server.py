@@ -20,8 +20,13 @@ from pathlib import Path
 
 import core
 
-ROOT = Path(__file__).parent.resolve()
-UI_DIR = ROOT / "ui"
+# Read-only files we ship come out of the bundle; everything the user should be
+# able to find sits next to the .exe. In a source checkout these are the same
+# folder, which is why this only matters once packaged.
+RESOURCES = core.resource_dir().resolve()
+ROOT = core.app_dir().resolve()
+UI_DIR = RESOURCES / "ui"
+ASSET_DIR = RESOURCES / "assets"
 OUT_ROOT = ROOT / "frames"
 
 # app.py sets this so the "Choose a video file" button can open a real Windows
@@ -36,6 +41,11 @@ FILE_PICKER = None
 # Python the moment it was locked. A subprocess costs a few hundred milliseconds
 # once at startup, which nobody notices, and it cannot take the app down.
 _PS = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+
+# Keeps a console window from flashing up behind the app on every call. This
+# used to live only in core.py, so the two functions below raised NameError,
+# the blanket `except` swallowed it, and the clipboard silently did nothing.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _clipboard_read():
@@ -369,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
         clean = urllib.parse.unquote(url_path.split("?", 1)[0])
         if clean in ("/", "/index.html"):
             return UI_DIR / "index.html"
-        for prefix, base in (("/ui/", UI_DIR), ("/frames/", OUT_ROOT), ("/assets/", ROOT / "assets")):
+        for prefix, base in (("/ui/", UI_DIR), ("/frames/", OUT_ROOT), ("/assets/", ASSET_DIR)):
             if clean.startswith(prefix):
                 candidate = (base / clean[len(prefix):]).resolve()
                 if base.resolve() == candidate or base.resolve() in candidate.parents:

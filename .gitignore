@@ -7,3 +7,9 @@ debug.log
 
 # Shortcuts store absolute paths - regenerate with assets/make_shortcut.ps1
 *.lnk
+
+# Build output - the release zip is ~184 MB, it must never enter git
+build/
+dist/
+release/*.zip
+bin/
