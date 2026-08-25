@@ -131,6 +131,12 @@ Optional: `--interval N` (only 1 2 3 5 10 30 60), `--outdir PATH`, `--no-keep-vi
   segfault cannot be caught, so the window just vanished. It shells out to
   PowerShell now. Any ctypes call anywhere needs explicit `argtypes`/`restype`;
   `set_window_icon()` in app.py is the pattern to copy.
+- **`Video Analyzer.bat` must stay pure ASCII.** cmd.exe reads a .bat by byte
+  offset; one non-ASCII character (an em dash in a comment was enough) shifts
+  that offset and cmd resumes parsing mid-word. It then ran fragments like
+  '001' and 'yzer' as commands and took every branch at once, telling the user
+  Python and FFmpeg were both missing when neither was. Check with
+  `grep -c '[^ -~]' "Video Analyzer.bat"` - it must print 0.
 - `[hidden] { display: none !important; }` at the top of style.css is load-
   bearing. Without it every `display: flex` rule beats the `hidden` attribute and
   the lightbox covers the whole app on load.
