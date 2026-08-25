@@ -5,65 +5,47 @@ title Video Analyzer
 cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 
-echo.
-echo   ==============================
-echo      V I D E O   A N A L Y Z E R
-echo   ==============================
-echo.
+rem ── Checks first. If anything is missing we stay in this window and explain. ──
 
 where python >nul 2>&1
 if errorlevel 1 (
+  echo.
   echo   Python is not installed on this computer.
   echo.
   echo   Get it from  https://www.python.org/downloads/
   echo   During setup, TICK the box "Add python.exe to PATH".
   echo   Then close this window and open it again.
-  goto end
+  goto hold
 )
 
 where ffmpeg >nul 2>&1
 if errorlevel 1 (
+  echo.
   echo   FFmpeg is missing - it is what reads the video.
   echo.
   echo   Open a terminal and run:   winget install Gyan.FFmpeg
   echo   Then close this window and open it again.
-  goto end
+  goto hold
 )
 
-python -c "import yt_dlp" >nul 2>&1
+python -c "import yt_dlp, webview" >nul 2>&1
 if errorlevel 1 (
-  echo   Installing the YouTube downloader, one moment...
-  python -m pip install --quiet yt-dlp
+  echo.
+  echo   Setting up a couple of things, one moment...
+  python -m pip install --quiet --disable-pip-version-check yt-dlp pywebview
   if errorlevel 1 (
     echo.
     echo   That failed. Check your internet connection and try again.
-    goto end
+    goto hold
   )
-  echo   Done.
-  echo.
+  echo   All set.
 )
 
-set "URL="
-set /p "URL=  Paste the YouTube link and press Enter: "
-if not defined URL (
-  echo.
-  echo   No link entered - nothing to do.
-  goto end
-)
+rem ── Everything is in place: open the app window and let this one go. ──
+start "" pythonw "%~dp0app.py"
+exit /b 0
 
-echo.
-python extract.py "%URL%"
-set "CODE=%errorlevel%"
-
-echo.
-if "%CODE%"=="0" (
-  echo   Opening the frames folder...
-  start "" "%~dp0frames"
-) else (
-  echo   It did not finish. The reason is printed above.
-)
-
-:end
+:hold
 echo.
 echo   Press any key to close this window.
 pause >nul

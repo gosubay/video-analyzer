@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.mp4
 .venv/
+debug.log
 
 # Shortcuts store absolute paths - regenerate with assets/make_shortcut.ps1
 *.lnk

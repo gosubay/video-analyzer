@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Analyzer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ────────────────────────────── sidebar ────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="/assets/icon-preview.png" alt="" class="brand-icon">
+      <div class="brand-text">
+        <strong>Video Analyzer</strong>
+        <span>frames, on time</span>
+      </div>
+    </div>
+
+    <div class="history-head">
+      <span>Recent</span>
+      <button class="linky" id="refresh-history" title="Refresh">↻</button>
+    </div>
+    <div class="history" id="history">
+      <p class="empty-note">Nothing yet.<br>Your videos will show up here.</p>
+    </div>
+
+    <div class="sidebar-foot">
+      <label class="check">
+        <input type="checkbox" id="keep-video" checked>
+        <span>Keep the video file</span>
+      </label>
+      <p class="hint">Saves the download next to the frames, so the transcript step later doesn't have to fetch it again.</p>
+    </div>
+  </aside>
+
+  <!-- ─────────────────────────────── main ──────────────────────────────── -->
+  <main class="main">
+
+    <!-- mascot + greeting -->
+    <header class="hero">
+      <div class="mascot-wrap" id="mascot-wrap" data-state="idle">
+        <div class="zzz" aria-hidden="true"><span>z</span><span>z</span><span>z</span></div>
+        <svg class="mascot" viewBox="0 0 160 160" role="img" aria-label="Clapperboard mascot">
+          <!-- shadow -->
+          <ellipse class="m-shadow" cx="80" cy="146" rx="40" ry="7"></ellipse>
+
+          <g class="m-body">
+            <!-- board -->
+            <rect x="22" y="52" width="116" height="82" rx="18" class="m-board"></rect>
+            <!-- cheeks -->
+            <ellipse class="m-cheek" cx="47" cy="103" rx="10" ry="7"></ellipse>
+            <ellipse class="m-cheek" cx="113" cy="103" rx="10" ry="7"></ellipse>
+
+            <!-- eyes: open -->
+            <g class="eyes eyes-open">
+              <ellipse cx="58" cy="88" rx="9" ry="10"></ellipse>
+              <ellipse cx="102" cy="88" rx="9" ry="10"></ellipse>
+              <circle class="glint" cx="61.5" cy="84.5" r="3"></circle>
+              <circle class="glint" cx="105.5" cy="84.5" r="3"></circle>
+            </g>
+            <!-- eyes: closed (sleeping) -->
+            <g class="eyes eyes-closed">
+              <path d="M49 89 q9 8 18 0"></path>
+              <path d="M93 89 q9 8 18 0"></path>
+            </g>
+            <!-- eyes: happy (^ ^) -->
+            <g class="eyes eyes-happy">
+              <path d="M49 92 q9 -12 18 0"></path>
+              <path d="M93 92 q9 -12 18 0"></path>
+            </g>
+            <!-- eyes: worried -->
+            <g class="eyes eyes-worried">
+              <circle cx="58" cy="90" r="7"></circle>
+              <circle cx="102" cy="90" r="7"></circle>
+              <path class="brow" d="M48 76 q10 -6 20 -1"></path>
+              <path class="brow" d="M112 76 q-10 -6 -20 -1"></path>
+            </g>
+
+            <!-- mouths -->
+            <path class="mouth mouth-smile" d="M68 112 q12 12 24 0"></path>
+            <path class="mouth mouth-open" d="M69 108 q11 20 22 0 q-11 6 -22 0"></path>
+            <path class="mouth mouth-wave" d="M67 114 q6 -7 12 0 q6 7 12 0"></path>
+            <path class="tongue" d="M74 116 q6 10 12 0 q-6 4 -12 0"></path>
+
+            <!-- sweat drop -->
+            <path class="sweat" d="M128 68 q7 11 0 15 q-7 -4 0 -15"></path>
+          </g>
+
+          <!-- clapper stick -->
+          <g class="m-clapper">
+            <rect x="18" y="22" width="124" height="26" rx="9" class="m-stick"></rect>
+            <g class="m-stripes">
+              <path d="M30 48 L42 22 L54 22 L42 48 Z"></path>
+              <path d="M62 48 L74 22 L86 22 L74 48 Z"></path>
+              <path d="M94 48 L106 22 L118 22 L106 48 Z"></path>
+            </g>
+          </g>
+        </svg>
+      </div>
+
+      <div class="greeting">
+        <h1 id="greet-title">Hello! Give me a video.</h1>
+        <p id="greet-sub">Paste a YouTube link and I'll grab evenly spaced frames with the exact time on every one.</p>
+      </div>
+    </header>
+
+    <!-- ── setup view ── -->
+    <section class="view" id="view-setup">
+
+      <div class="card paste-card">
+        <div class="paste-row">
+          <input type="text" id="url-input" class="url-input" spellcheck="false"
+                 placeholder="Paste a YouTube link here…" autocomplete="off">
+          <button class="btn btn-primary" id="add-btn">Add</button>
+        </div>
+        <div class="paste-foot">
+          <button class="linky" id="pick-file">📁 or choose a video file from this computer</button>
+          <span class="inline-error" id="add-error"></span>
+        </div>
+        <div class="clip-suggest" id="clip-suggest" hidden>
+          <span>You've got a YouTube link copied —</span>
+          <button class="linky strong" id="clip-use">use it?</button>
+          <button class="linky quiet" id="clip-dismiss">no thanks</button>
+        </div>
+      </div>
+
+      <div class="tips" id="tips">
+        <div class="tip">
+          <span class="tip-icon">➕</span>
+          <strong>Add as many as you like</strong>
+          <p>They run one after another while you get on with something else.</p>
+        </div>
+        <div class="tip">
+          <span class="tip-icon">⏱️</span>
+          <strong>Every frame knows its time</strong>
+          <p><code>frame_0090.0s.jpg</code> really is the picture at 90 seconds — no guessing.</p>
+        </div>
+        <div class="tip">
+          <span class="tip-icon">📁</span>
+          <strong>Nothing gets lost</strong>
+          <p>Each video gets its own numbered folder. Find them again under Recent.</p>
+        </div>
+      </div>
+
+      <div class="queue-block" id="queue-block" hidden>
+        <div class="block-head">
+          <h2>Queue <span class="count-pill" id="queue-count">0</span></h2>
+          <button class="linky quiet" id="clear-queue">clear all</button>
+        </div>
+        <div class="queue" id="queue"></div>
+      </div>
+
+      <div class="card go-card" id="go-card" hidden>
+        <div class="go-left">
+          <label for="interval-select">A frame every</label>
+          <select id="interval-select" class="select">
+            <option value="">Auto — about 30 frames</option>
+            <option value="1">1 second</option>
+            <option value="2">2 seconds</option>
+            <option value="3">3 seconds</option>
+            <option value="5">5 seconds</option>
+            <option value="10">10 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">60 seconds</option>
+          </select>
+        </div>
+        <button class="btn btn-go" id="start-btn">Let's go ✨</button>
+      </div>
+
+      <p class="tool-warning" id="tool-warning" hidden></p>
+    </section>
+
+    <!-- ── working view ── -->
+    <section class="view" id="view-working" hidden>
+      <div class="card work-card">
+        <div class="work-head">
+          <h2 id="work-title">Working…</h2>
+          <span class="work-of" id="work-of"></span>
+        </div>
+
+        <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+        <p class="work-stage" id="work-stage">Getting started…</p>
+
+        <div class="frame-dots" id="frame-dots"></div>
+
+        <button class="btn btn-ghost" id="cancel-btn">Stop</button>
+      </div>
+
+      <div class="queue" id="queue-live"></div>
+    </section>
+
+    <!-- ── results view ── -->
+    <section class="view" id="view-results" hidden>
+      <div class="results" id="results"></div>
+      <div class="results-actions">
+        <button class="btn btn-primary" id="again-btn">Do another one</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lb-close" id="lb-close" title="Close">✕</button>
+  <button class="lb-nav lb-prev" id="lb-prev" title="Previous">‹</button>
+  <figure class="lb-figure">
+    <img id="lb-img" alt="">
+    <figcaption id="lb-caption"></figcaption>
+  </figure>
+  <button class="lb-nav lb-next" id="lb-next" title="Next">›</button>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<div class="confetti" id="confetti" aria-hidden="true"></div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>
