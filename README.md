@@ -1,0 +1,81 @@
+# Video Analyzer
+
+Give it a YouTube link. It gives you back a folder of screenshots taken at even
+intervals through the video, each one named with the exact second it came from,
+plus a `manifest.json` listing them all.
+
+The point: you can hand those frames to Claude's vision API and line them up
+against a timestamped transcript, because the picture named `frame_0090.0s.jpg`
+really is the picture at 90 seconds.
+
+## One-time setup
+
+1. Install FFmpeg (if `ffmpeg -version` in a terminal errors, you don't have it):
+   ```bash
+   winget install Gyan.FFmpeg
+   ```
+   Close and reopen your terminal afterwards.
+
+2. Install the YouTube downloader:
+   ```bash
+   pip install yt-dlp
+   ```
+
+## Using it
+
+```bash
+python extract.py https://www.youtube.com/watch?v=jNQXAC9IVRw
+```
+
+That's it. You'll see it download, then count out the frames, then tell you where
+it put them.
+
+### What you get
+
+```
+frames/
+  1 - Me at the zoo - 25-8-2026/
+      frame_0000.0s.jpg
+      frame_0001.0s.jpg
+      frame_0002.0s.jpg
+      ...
+      manifest.json
+      source.mp4
+```
+
+The number in front of the folder counts up every time you run it, so your videos
+stay in the order you processed them.
+
+### Options
+
+| Option | What it does |
+|---|---|
+| `--interval N` | Force the gap between frames. Only `1 2 3 5 10 30 60` are allowed. |
+| `--outdir PATH` | Put the video folders somewhere other than `./frames`. |
+| `--no-keep-video` | Don't save the downloaded video next to the frames. |
+
+## How many frames you get
+
+It aims for about 30 frames per video and picks the gap from a fixed list —
+1, 2, 3, 5, 10, 30 or 60 seconds:
+
+| Video length | Gap | Frames |
+|---:|---:|---:|
+| 30 seconds | 1s | 30 |
+| 1 minute | 2s | 30 |
+| 90 seconds | 3s | 30 |
+| 5 minutes | 10s | 30 |
+| 15 minutes | 30s | 30 |
+| 30 minutes | 60s | 30 |
+| 1 hour | 60s | 60 |
+
+Anything up to half an hour gives you 30 frames or fewer. Longer than that and
+the count climbs, because 60 seconds is the biggest gap available.
+
+## If something goes wrong
+
+It prints one plain sentence saying what happened — private video, deleted video,
+no internet, and so on. If it mentions FFmpeg or yt-dlp being missing, redo the
+setup steps above.
+
+Full technical spec: [CLAUDE.md](CLAUDE.md)
