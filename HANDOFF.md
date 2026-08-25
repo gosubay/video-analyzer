@@ -2,11 +2,14 @@
 Updated: 2026-08-25 SGT (session 1)
 
 ## What this project is
-A command-line tool that takes a YouTube link, downloads the video, and saves
+A Windows app that takes a YouTube link, downloads the video, and saves
 screenshots taken at even intervals through it — each named with the exact second
 it came from — plus a `manifest.json` listing every frame and its timestamp. The
 frames are meant to be fed to Claude's vision API and matched against a
 separately generated timestamped transcript.
+
+There are two front ends over one engine (`core.py`): a desktop window
+(`app.py` + `server.py` + `ui/`) and the original command line (`extract.py`).
 
 ## Current status
 v1 works end to end and has been run and verified in this session.
@@ -25,20 +28,40 @@ Proven:
 - Folder sequence numbering (`1 - ...` then `2 - ...`), `youtu.be` short links,
   `--interval` and `--no-keep-video` flags.
 
-Not yet done: Galvin has not run it himself, and it has never been pointed at one
-of his own videos (all testing used a 19s public clip and a synthetic 200s file).
+**Galvin has run it himself** — `frames/2 - What Is Simping 🤔 - 25-8-2026`, a 40s
+video with an emoji and a `?` in the title. Folder name, manifest and all 20
+frames came out correct.
+
+The app window is also proven, driven end to end through its own API in this
+session:
+- full run: inspect → queue → download → extract → results, frames visible
+- cancel mid-extraction: stops, and leaves **no** part-finished folder behind
+- a queue of two where the second video is dead: the good one still finishes,
+  the dead one is marked failed with a plain sentence
+- bad input (Vimeo link, gibberish, deleted video) rejected before queueing
+- window verified open, visible, 1180x820, with the app icon applied
+
+Not yet done: Galvin has not clicked around the new window himself.
 
 ## Last commit
-`001ef49` — feat(launcher): add double-click launcher, app icon and shortcut
+`fb02383` — feat(ui): add desktop app window with queue, cancel and frame grid
 (pushed: **yes** — https://github.com/gosubay/video-analyzer, **private**, branch `main`)
 
 ## How to launch
 Double-click **Video Analyzer.lnk** in the project folder (purple film icon). It
-prompts for the link and opens the frames folder when done.
+checks Python/FFmpeg/packages, then opens the app window and closes itself.
 
-Or from a terminal:
+To see the UI in a browser while working on it (no window, live reload by hand):
 ```
-python extract.py <youtube_url>
+python server.py 8730      then open http://127.0.0.1:8730/
+```
+To screenshot the UI without a visible browser pane:
+```
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --disable-gpu --window-size=1180,820 --screenshot=out.png http://127.0.0.1:8730/
+```
+Command line still works and is unchanged:
+```
+python extract.py <youtube_url_or_video_file>
 ```
 Output lands in `frames/<N> - <Title> - <D-M-YYYY>/`. There is a sample run left
 in place at `frames/1 - Me at the zoo - 25-8-2026/` to look at.
@@ -46,11 +69,12 @@ in place at `frames/1 - Me at the zoo - 25-8-2026/` to look at.
 Optional: `--interval N` (only 1 2 3 5 10 30 60), `--outdir PATH`, `--no-keep-video`.
 
 ## In progress / next steps
-1. Galvin to run it on one of his own videos and confirm the folder naming reads
-   the way he wants in Explorer.
+1. Galvin to open the new window and say what he wants changed.
 2. Ask whether the repo should be flipped to public — it was created private
    because he did not say which he wanted.
-3. Build the transcript step — it must emit timestamps in seconds as floats to
+3. Package as a .exe for friends (the `exe-release` skill) — pywebview bundles
+   with PyInstaller, but FFmpeg still has to be found or shipped alongside.
+4. Build the transcript step — it must emit timestamps in seconds as floats to
    match `manifest.json`. The downloaded `source.mp4` is kept beside the frames
    specifically so this step doesn't re-download.
 4. Then the vision step: glob `frame_*.jpg` (already in time order), pair each with
@@ -69,6 +93,14 @@ Optional: `--interval N` (only 1 2 3 5 10 30 60), `--outdir PATH`, `--no-keep-vi
   was explained.
 - Repo created **private** under `gosubay` — he asked for a repo but not which
   visibility, so the safe default was taken.
+- UI is a local web page in a native window (pywebview / Edge WebView2), not
+  tkinter — tkinter cannot do the soft-pastel look he picked.
+- Look: **cute pastel with a mascot**, chosen by Galvin from four options. The
+  mascot is a clapperboard with idle / working / done / error moods.
+- All four optional features were requested and built: queue, cancel, copy-for-
+  Claude, local video files.
+- Deleting individual frames was deliberately NOT built — it would renumber
+  `index` and force a manifest rewrite. Whole runs can be deleted from Recent.
 
 ## Gotchas
 - **Never switch frame extraction to `ffmpeg -vf fps=1/n` as an optimisation.** It
@@ -93,6 +125,21 @@ Optional: `--interval N` (only 1 2 3 5 10 30 60), `--outdir PATH`, `--no-keep-vi
 - Testing the .bat from bash or PowerShell is painful because of quote handling
   around the space in the filename. What works: write a one-line wrapper .bat
   that `call`s it by full path, then pipe the URL into that wrapper.
+- **Never read the clipboard with ctypes.** The first version did and segfaulted
+  the entire app — `GetClipboardData` returns a 64-bit handle, ctypes defaults
+  return types to 32-bit int, and locking the truncated handle killed Python. A
+  segfault cannot be caught, so the window just vanished. It shells out to
+  PowerShell now. Any ctypes call anywhere needs explicit `argtypes`/`restype`;
+  `set_window_icon()` in app.py is the pattern to copy.
+- `[hidden] { display: none !important; }` at the top of style.css is load-
+  bearing. Without it every `display: flex` rule beats the `hidden` attribute and
+  the lightbox covers the whole app on load.
+- The frame-count shown before a run comes from yt-dlp's duration (a whole
+  number); the run itself uses ffprobe (exact). So the estimate can be one out —
+  19 vs 20 on the test clip. Output is correct either way.
+- The dev server must be run as `python server.py` (it serves in the main
+  thread). An earlier version parked the main thread on an Event and the harness
+  killed it as a segfault.
 - Videos over 30 minutes produce more than 30 frames (60s is the top of the
   ladder). Accepted — Galvin said he mostly analyses short videos. A `--max-frames`
   cap is the obvious fix if that ever bites.
