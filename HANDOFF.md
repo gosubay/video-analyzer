@@ -72,8 +72,9 @@ session:
 Not yet done: Galvin has not clicked around the new window himself.
 
 ## Last commit
-`fb02383` — feat(ui): add desktop app window with queue, cancel and frame grid
-(pushed: **yes** — https://github.com/gosubay/video-analyzer, **private**, branch `main`)
+`bcdefa6` — feat: add transcripts and download-only mode
+(pushed: **yes**, verified with `git push` output — https://github.com/gosubay/video-analyzer,
+**private**, branch `main`)
 
 ## How to launch
 Double-click **Video Analyzer.lnk** in the project folder (purple film icon). It
