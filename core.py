@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,13 @@ TARGET_FRAMES = 30
 MAX_HEIGHT = 720          # download cap; Claude's vision API downsizes above this anyway
 JPEG_QUALITY = 2          # ffmpeg -q:v, 2 = high quality
 MAX_TITLE_CHARS = 90      # keeps the full path clear of the Windows 260-char limit
+
+# Transcripts - see CLAUDE.md sections 17-20.
+WHISPER_MODEL = "medium"          # Galvin's choice, 2026-09-05
+TRANSCRIPT_JSON = "transcript.json"
+TRANSCRIPT_TXT = "transcript.txt"
+_WHISPER_CACHE = {}               # device -> loaded model, one load per process
+_WHISPER_LOCK = threading.Lock()
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg"}
 
@@ -187,13 +195,26 @@ def looks_like_url(text):
     return bool(re.match(r"^\s*(https?://|www\.)", str(text or ""), re.I))
 
 
+# Hosts accepted by "just download the video" mode - see CLAUDE.md section 16.
+_DOWNLOAD_HOSTS = (
+    "youtube.com", "youtu.be", "youtube-nocookie.com",
+    "instagram.com", "instagr.am",
+    "facebook.com", "fb.watch",
+    "tiktok.com",
+)
+
+
+def _host_of(url):
+    host_match = re.match(r"^https?://([^/]+)", url, re.I)
+    host = host_match.group(1).lower() if host_match else ""
+    return host.split("@")[-1].split(":")[0]
+
+
 def validate_url(url):
     url = str(url or "").strip()
     if not re.match(r"^https?://", url, re.I):
         url = "https://" + url
-    host_match = re.match(r"^https?://([^/]+)", url, re.I)
-    host = host_match.group(1).lower() if host_match else ""
-    host = host.split("@")[-1].split(":")[0]
+    host = _host_of(url)
     allowed = ("youtube.com", "youtu.be", "youtube-nocookie.com")
     if not any(host == d or host.endswith("." + d) for d in allowed):
         raise ExtractError(
@@ -203,9 +224,35 @@ def validate_url(url):
     return url
 
 
+def validate_download_url(url):
+    """
+    Same idea as validate_url but for 'just download the video' mode, which
+    also accepts Instagram, Facebook and TikTok links. Frame extraction stays
+    YouTube-only - see CLAUDE.md section 16.
+    """
+    url = str(url or "").strip()
+    if not re.match(r"^https?://", url, re.I):
+        url = "https://" + url
+    host = _host_of(url)
+    if not any(host == d or host.endswith("." + d) for d in _DOWNLOAD_HOSTS):
+        raise ExtractError(
+            f"That does not look like a YouTube, Instagram, Facebook or TikTok link "
+            f"(host: {host or 'none'})."
+        )
+    return url
+
+
 def is_youtube_url(text):
     try:
         validate_url(text)
+        return True
+    except ExtractError:
+        return False
+
+
+def is_download_url(text):
+    try:
+        validate_download_url(text)
         return True
     except ExtractError:
         return False
@@ -300,20 +347,28 @@ def probe_dimensions(video_path):
         return None, None
 
 
-def inspect_source(source, interval=None):
+def inspect_source(source, interval=None, mode="frames"):
     """
-    Look at a YouTube link or a local file WITHOUT downloading it, and work out
-    what a run would produce. Feeds the confirm-before-you-download screen.
+    Look at a link or a local file WITHOUT downloading it, and work out what a
+    run would produce. Feeds the confirm-before-you-download screen.
+
+    mode="frames" (default) extracts timestamped frames and is YouTube-only.
+    mode="video" is "just download the video" - no frames, but also accepts
+    Instagram, Facebook and TikTok links. See CLAUDE.md section 16.
     """
     source = str(source or "").strip().strip('"')
+    video_only = mode == "video"
 
     if Path(source).expanduser().is_file():
+        if video_only:
+            raise ExtractError("'Just download the video' only works with a link, not a file already on this computer.")
         path = Path(source).expanduser().resolve()
         if path.suffix.lower() not in VIDEO_SUFFIXES:
             raise ExtractError(f"{path.suffix or 'That file type'} is not a video file I can read.")
         duration = probe_duration(path)
         info = {
             "kind": "file",
+            "mode": mode,
             "source": str(path),
             "video_id": None,
             "title": path.stem,
@@ -322,7 +377,7 @@ def inspect_source(source, interval=None):
             "url": None,
         }
     else:
-        url = validate_url(source)
+        url = validate_download_url(source) if video_only else validate_url(source)
         yt_dlp = _import_ytdlp()
         opts = {
             "quiet": True, "no_warnings": True, "noplaylist": True,
@@ -345,7 +400,8 @@ def inspect_source(source, interval=None):
             raise ExtractError("That video has no duration - it may be a livestream.")
         duration = float(duration)
         info = {
-            "kind": "youtube",
+            "kind": "video" if video_only else "youtube",
+            "mode": mode,
             "source": url,
             "video_id": meta.get("id"),
             "title": meta.get("title") or meta.get("id") or "untitled",
@@ -353,6 +409,13 @@ def inspect_source(source, interval=None):
             "thumbnail": meta.get("thumbnail"),
             "url": meta.get("webpage_url") or url,
         }
+
+    if video_only:
+        info.update({
+            "duration_seconds": round(duration, 3),
+            "duration_pretty": pretty_duration(duration),
+        })
+        return info
 
     chosen = int(interval) if interval else choose_interval(duration)
     stamps = plan_timestamps(duration, chosen)
@@ -494,7 +557,275 @@ def extract_frames(video_path, timestamps, out_dir, on_frame=None, job=_NULL_JOB
 
 
 # ---------------------------------------------------------------- the whole run
-def process(source, out_root, interval=None, keep_video=True,
+# ---------------------------------------------------------------- transcripts
+def _enable_cuda_dlls():
+    """
+    Put the pip-shipped CUDA libraries on the DLL search path.
+
+    CTranslate2 loads cublas64_12.dll and cuDNN lazily with a plain
+    LoadLibrary, which searches PATH and ignores os.add_dll_directory(). The
+    nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels drop those DLLs inside
+    site-packages, which is not on PATH. Without this the model appears to
+    load and then dies on the first encode. See CLAUDE.md section 18 - do not
+    swap this for add_dll_directory(), it was tried and it does not work.
+    """
+    roots = set(site.getsitepackages() or [])
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        roots.add(user_site)
+    roots.add(str(Path(sys.executable).parent / "Lib" / "site-packages"))
+    if getattr(sys, "frozen", False):
+        roots.add(str(resource_dir()))
+
+    found = []
+    for root in roots:
+        for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin"):
+            folder = Path(root) / sub
+            if folder.is_dir():
+                found.append(str(folder))
+    if found:
+        current = os.environ.get("PATH", "")
+        missing = [f for f in found if f not in current]
+        if missing:
+            os.environ["PATH"] = os.pathsep.join(missing) + os.pathsep + current
+    return found
+
+
+def whisper_available():
+    """True if the transcription library is installed at all."""
+    try:
+        import faster_whisper  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _build_whisper(device, compute_type):
+    """Load the model onto one device. Cached per device for the process."""
+    with _WHISPER_LOCK:
+        if device in _WHISPER_CACHE:
+            return _WHISPER_CACHE[device]
+        try:
+            from faster_whisper import WhisperModel
+        except Exception:
+            raise ExtractError(
+                "The transcription library is not installed. "
+                "Run: pip install faster-whisper"
+            )
+        _enable_cuda_dlls()
+        model = WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type)
+        _WHISPER_CACHE[device] = model
+        return model
+
+
+def transcribe(video_path, on_progress=None, job=_NULL_JOB):
+    """
+    Speech to text for one video file, using faster-whisper.
+
+    Tries the GPU first and falls back to CPU. The fallback wraps the real
+    transcription, not a warm-up probe, because CTranslate2 loads its CUDA
+    libraries lazily - a model that built cleanly can still fail on the first
+    encode (see CLAUDE.md section 18).
+
+    on_progress(percent) is called as the audio is consumed. Returns a dict in
+    the transcript.json shape from CLAUDE.md section 19 - segment level, floats,
+    seconds from the start of the video.
+    """
+    job.check()
+    attempts = [("cuda", "float16"), ("cpu", "int8")]
+    last_error = None
+
+    for device, compute_type in attempts:
+        try:
+            model = _build_whisper(device, compute_type)
+            return _run_whisper(model, device, video_path, on_progress, job)
+        except (Cancelled, ExtractError):
+            raise
+        except Exception as exc:
+            last_error = exc
+            _WHISPER_CACHE.pop(device, None)
+            continue
+
+    raise ExtractError(
+        "The transcriber could not run on this computer "
+        f"({type(last_error).__name__}). The frames are still fine."
+    )
+
+
+def _run_whisper(model, device, video_path, on_progress, job):
+    """One transcription pass with an already-loaded model."""
+    segments, info = model.transcribe(
+        str(video_path),
+        word_timestamps=True,   # sharpens where the segment boundaries land
+        vad_filter=True,        # skips silence instead of hallucinating over it
+    )
+
+    total = float(getattr(info, "duration", 0) or 0)
+    out = []
+    pieces = []
+    for segment in segments:            # lazy - cancelling here really stops work
+        job.check()
+        text = (segment.text or "").strip()
+        if not text:
+            continue
+        out.append({
+            "index": len(out),
+            "start": float(round(segment.start, 2)),
+            "end": float(round(segment.end, 2)),
+            "text": text,
+        })
+        pieces.append(text)
+        if on_progress and total:
+            on_progress(min(100.0, segment.end * 100.0 / total))
+
+    if on_progress:
+        on_progress(100.0)
+
+    return {
+        "source": "whisper",
+        "model": WHISPER_MODEL,
+        "device": device,
+        "language": getattr(info, "language", None),
+        "duration_seconds": float(round(total, 3)),
+        "segment_count": len(out),
+        "text": " ".join(pieces),
+        "segments": out,
+    }
+
+
+_VTT_TIME = re.compile(
+    r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})"
+)
+
+
+def _vtt_seconds(hours, minutes, secs, millis):
+    return (int(hours) * 3600 + int(minutes) * 60 + int(secs)
+            + int(millis.ljust(3, "0")) / 1000.0)
+
+
+def _parse_vtt(raw):
+    """
+    Turn a WebVTT caption file into our segment list.
+
+    YouTube's auto-captions are 'rolling' - each cue repeats the tail of the one
+    before it, wrapped in <c> karaoke tags. Tags are stripped and repeated lines
+    dropped, otherwise every sentence lands in the transcript two or three times.
+    """
+    segments = []
+    recent = []
+    normalised = raw.replace("\r\n", "\n").replace("\r", "\n")
+    for block in re.split(r"\n\s*\n", normalised):
+        match = _VTT_TIME.search(block)
+        if not match:
+            continue
+        parts = match.groups()
+        start = _vtt_seconds(*parts[:4])
+        end = _vtt_seconds(*parts[4:])
+        body = re.sub(r"<[^>]+>", "", block[match.end():])   # <c>, <00:00:01.000>
+        lines = [line.strip() for line in body.split("\n") if line.strip()]
+        fresh = [line for line in lines if line not in recent]
+        if lines:
+            recent = lines[-4:]
+        text = " ".join(fresh).strip()
+        if not text:
+            continue
+        if segments and segments[-1]["text"] == text:
+            segments[-1]["end"] = float(round(end, 2))
+            continue
+        segments.append({
+            "index": len(segments),
+            "start": float(round(start, 2)),
+            "end": float(round(end, 2)),
+            "text": text,
+        })
+    for position, segment in enumerate(segments):
+        segment["index"] = position
+    return segments
+
+
+def fetch_captions(url, workdir, job=_NULL_JOB):
+    """
+    The fallback: ask the site for its own caption track instead of listening to
+    the audio. Free and instant, but auto-captions have no punctuation - which
+    is why this runs only when Whisper cannot. Returns None if there are none.
+    """
+    yt_dlp = _import_ytdlp()
+    job.check()
+    opts = {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["en", "en-US", "en-GB", "en-orig"],
+        "subtitlesformat": "vtt",
+        "outtmpl": str(Path(workdir) / "captions.%(ext)s"),
+        "quiet": True, "no_warnings": True, "noplaylist": True,
+        "logger": _SilentLogger(), "no_color": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except Exception:
+        return None
+
+    files = sorted(Path(workdir).glob("captions*.vtt"))
+    if not files:
+        return None
+    try:
+        raw = files[0].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    segments = _parse_vtt(raw)
+    if not segments:
+        return None
+    return {
+        "source": "captions",
+        "model": None,
+        "device": None,
+        "language": "en",
+        "duration_seconds": float(round(segments[-1]["end"], 3)),
+        "segment_count": len(segments),
+        "text": " ".join(seg["text"] for seg in segments),
+        "segments": segments,
+    }
+
+
+def build_transcript(video_path, url=None, workdir=None, on_progress=None, job=_NULL_JOB):
+    """
+    Get a transcript by the best means available: Whisper if it is installed,
+    the site's own captions if it is not. Raises ExtractError if neither works.
+    """
+    if whisper_available():
+        return transcribe(video_path, on_progress=on_progress, job=job)
+
+    if url and workdir:
+        captions = fetch_captions(url, workdir, job=job)
+        if captions:
+            if on_progress:
+                on_progress(100.0)
+            return captions
+
+    raise ExtractError(
+        "No transcript could be made - faster-whisper is not installed and this "
+        "video has no captions of its own. Run: pip install faster-whisper"
+    )
+
+
+def write_transcript(transcript, out_dir):
+    """Write transcript.json and the readable transcript.txt beside it."""
+    out_dir = Path(out_dir)
+    (out_dir / TRANSCRIPT_JSON).write_text(
+        json.dumps(transcript, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    lines = [
+        f"[{pretty_duration(seg['start'])}] {seg['text']}"
+        for seg in transcript["segments"]
+    ]
+    (out_dir / TRANSCRIPT_TXT).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return TRANSCRIPT_JSON
+
+
+def process(source, out_root, interval=None, keep_video=True, transcript=False,
             on_stage=None, job=_NULL_JOB):
     """
     Turn one YouTube link or local video file into a finished folder.
@@ -503,6 +834,7 @@ def process(source, out_root, interval=None, keep_video=True,
         ("metadata", info)                     once the title/duration are known
         ("download", {"percent": float, ...})  repeatedly while downloading
         ("extract",  {"done": n, "total": n})  once per frame
+        ("transcribe", {"percent": float})     while listening, if asked for
         ("saving",   {})                       while writing the manifest
     Returns the manifest dict with an extra "folder" key.
     """
@@ -569,6 +901,25 @@ def process(source, out_root, interval=None, keep_video=True,
             shutil.rmtree(out_dir, ignore_errors=True)   # never leave half a folder
             raise
 
+        transcript_data = None
+        transcript_error = None
+        if transcript:
+            announce("transcribe", {"percent": 0.0})
+            try:
+                transcript_data = build_transcript(
+                    video_path,
+                    url=None if is_local else meta.get("webpage_url") or source,
+                    workdir=workdir,
+                    on_progress=lambda pct: announce("transcribe", {"percent": pct}),
+                    job=job,
+                )
+            except Cancelled:
+                shutil.rmtree(out_dir, ignore_errors=True)
+                raise
+            except ExtractError as exc:
+                # A transcript that fails must never throw away good frames.
+                transcript_error = str(exc)
+
         announce("saving")
         kept_video = None
         if keep_video:
@@ -591,11 +942,113 @@ def process(source, out_root, interval=None, keep_video=True,
             "frame_height": height,
             "source_video": kept_video,
             "source_file": str(video_path) if is_local else None,
+            "transcript": TRANSCRIPT_JSON if transcript_data else None,
+            "transcript_error": transcript_error,
             "frames": frames,
         }
+        if transcript_data:
+            write_transcript(transcript_data, out_dir)
         (out_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+
+    result = dict(manifest)
+    result["folder"] = str(out_dir)
+    result["folder_name"] = out_dir.name
+    return result
+
+
+def download_only(source, out_root, transcript=False, on_stage=None, job=_NULL_JOB):
+    """
+    "Just download the video" - no frame extraction. Accepts YouTube,
+    Instagram, Facebook or TikTok links. See CLAUDE.md section 16.
+
+    on_stage(stage, data) is called with the same stages as process(), minus
+    "extract". Returns a manifest-shaped dict with an extra "folder" key.
+    """
+    def announce(stage, data=None):
+        if on_stage:
+            on_stage(stage, data or {})
+
+    which_or_die("ffmpeg", "Install FFmpeg and reopen the app.")
+
+    out_root = Path(out_root).expanduser().resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
+    url = validate_download_url(source)
+
+    with tempfile.TemporaryDirectory(prefix="video_analyzer_") as workdir:
+        job.check()
+        announce("download", {"percent": 0.0})
+        video_path, meta = download(
+            url, workdir,
+            on_progress=lambda pct, total: announce(
+                "download", {"percent": pct, "total_bytes": total}
+            ),
+            job=job,
+        )
+        title = meta.get("title") or meta.get("id") or "untitled"
+        announce("metadata", {"title": title, "kind": "video"})
+
+        job.check()
+        duration = probe_duration(video_path)
+        width, height = probe_dimensions(video_path)
+
+        today = _dt.date.today()
+        base_name = (
+            f"{next_sequence_number(out_root)} - {safe_title(title)} - "
+            f"{today.day}-{today.month}-{today.year}"
+        )
+        out_dir = out_root / base_name
+        suffix = 2
+        while out_dir.exists():                      # same video twice in one day
+            out_dir = out_root / f"{base_name} ({suffix})"
+            suffix += 1
+
+        try:
+            out_dir.mkdir(parents=True)
+
+            transcript_data = None
+            transcript_error = None
+            if transcript:
+                announce("transcribe", {"percent": 0.0})
+                try:
+                    transcript_data = build_transcript(
+                        video_path,
+                        url=meta.get("webpage_url") or url,
+                        workdir=workdir,
+                        on_progress=lambda pct: announce("transcribe", {"percent": pct}),
+                        job=job,
+                    )
+                except ExtractError as exc:
+                    # A transcript that fails must never throw away a good download.
+                    transcript_error = str(exc)
+
+            announce("saving")
+            kept_video = f"source{video_path.suffix}"
+            shutil.move(str(video_path), str(out_dir / kept_video))
+
+            manifest = {
+                "mode": "video_only",
+                "video_id": meta.get("id"),
+                "title": title,
+                "url": meta.get("webpage_url") or source,
+                "uploader": meta.get("uploader"),
+                "extracted_on": today.isoformat(),
+                "duration_seconds": round(duration, 3),
+                "frame_width": width,
+                "frame_height": height,
+                "source_video": kept_video,
+                "transcript": TRANSCRIPT_JSON if transcript_data else None,
+                "transcript_error": transcript_error,
+            }
+            if transcript_data:
+                write_transcript(transcript_data, out_dir)
+            (out_dir / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except (Cancelled, ExtractError):
+            shutil.rmtree(out_dir, ignore_errors=True)   # never leave half a folder
+            raise
 
     result = dict(manifest)
     result["folder"] = str(out_dir)
@@ -622,10 +1075,12 @@ def read_history(out_root, limit=60):
             "folder": str(child),
             "folder_name": child.name,
             "title": child.name,
+            "mode": "frames",
             "frame_count": len(list(child.glob("frame_*.jpg"))),
             "extracted_on": None,
             "duration_pretty": None,
             "interval_seconds": None,
+            "has_transcript": (child / TRANSCRIPT_JSON).is_file(),
             "ok": manifest_path.is_file(),
         }
         if manifest_path.is_file():
@@ -633,6 +1088,7 @@ def read_history(out_root, limit=60):
                 data = json.loads(manifest_path.read_text(encoding="utf-8"))
                 record.update({
                     "title": data.get("title") or record["title"],
+                    "mode": data.get("mode") or "frames",
                     "frame_count": data.get("frame_count", record["frame_count"]),
                     "extracted_on": data.get("extracted_on"),
                     "interval_seconds": data.get("interval_seconds"),

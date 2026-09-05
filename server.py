@@ -86,11 +86,12 @@ class AppState:
             self.phase = "idle"          # idle | working | done | error | cancelled
             self.queue = []
             self.current = -1
-            self.stage = None            # download | extract | saving
+            self.stage = None            # download | extract | transcribe | saving
             self.percent = 0.0
             self.frames_done = 0
             self.frames_total = 0
             self.message = ""
+            self.transcript = False
             self.results = []
             self.error = None
 
@@ -105,6 +106,7 @@ class AppState:
                 "frames_done": self.frames_done,
                 "frames_total": self.frames_total,
                 "message": self.message,
+                "transcript": self.transcript,
                 "results": list(self.results),
                 "error": self.error,
                 "busy": self.phase == "working",
@@ -119,13 +121,15 @@ def frame_url(folder_name, filename):
     return f"/frames/{quote(folder_name)}/{quote(filename)}"
 
 
-def _run_queue(items, interval, keep_video):
+def _run_queue(items, interval, keep_video, transcript):
     """Worker thread: process every queued item in order."""
     job = STATE.job
 
     for position, item in enumerate(items):
         if job.cancelled:
             break
+
+        mode = item.get("mode") or "frames"
 
         with STATE.lock:
             STATE.current = position
@@ -144,19 +148,31 @@ def _run_queue(items, interval, keep_video):
                 elif stage == "extract":
                     STATE.frames_done = int(data.get("done", 0))
                     STATE.frames_total = int(data.get("total", 0)) or STATE.frames_total
+                elif stage == "transcribe":
+                    STATE.percent = float(data.get("percent", 0.0))
                 elif stage == "metadata":
                     if data.get("title"):
                         STATE.queue[_pos]["title"] = data["title"]
 
         try:
-            result = core.process(
-                item["source"],
-                out_root=OUT_ROOT,
-                interval=interval,
-                keep_video=keep_video,
-                on_stage=on_stage,
-                job=job,
-            )
+            if mode == "video":
+                result = core.download_only(
+                    item["source"],
+                    out_root=OUT_ROOT,
+                    transcript=transcript,
+                    on_stage=on_stage,
+                    job=job,
+                )
+            else:
+                result = core.process(
+                    item["source"],
+                    out_root=OUT_ROOT,
+                    interval=interval,
+                    keep_video=keep_video,
+                    transcript=transcript,
+                    on_stage=on_stage,
+                    job=job,
+                )
         except core.Cancelled:
             with STATE.lock:
                 STATE.queue[position]["status"] = "cancelled"
@@ -179,24 +195,40 @@ def _run_queue(items, interval, keep_video):
         folder_name = result["folder_name"]
         with STATE.lock:
             STATE.queue[position]["status"] = "done"
-            STATE.results.append({
+            entry = {
                 "folder": result["folder"],
                 "folder_name": folder_name,
                 "title": result["title"],
-                "frame_count": result["frame_count"],
-                "interval_seconds": result["interval_seconds"],
+                "mode": mode,
                 "duration_pretty": core.pretty_duration(result["duration_seconds"]),
                 "manifest": str(Path(result["folder"]) / "manifest.json"),
-                "frames": [
-                    {
-                        "filename": f["filename"],
-                        "timestamp": f["timestamp"],
-                        "label": core.pretty_duration(f["timestamp"]),
-                        "url": frame_url(folder_name, f["filename"]),
-                    }
-                    for f in result["frames"]
-                ],
-            })
+                "transcript": (
+                    str(Path(result["folder"]) / result["transcript"])
+                    if result.get("transcript") else None
+                ),
+                "transcript_txt": (
+                    str(Path(result["folder"]) / core.TRANSCRIPT_TXT)
+                    if result.get("transcript") else None
+                ),
+                "transcript_error": result.get("transcript_error"),
+            }
+            if mode == "video":
+                entry["source_video"] = str(Path(result["folder"]) / result["source_video"])
+            else:
+                entry.update({
+                    "frame_count": result["frame_count"],
+                    "interval_seconds": result["interval_seconds"],
+                    "frames": [
+                        {
+                            "filename": f["filename"],
+                            "timestamp": f["timestamp"],
+                            "label": core.pretty_duration(f["timestamp"]),
+                            "url": frame_url(folder_name, f["filename"]),
+                        }
+                        for f in result["frames"]
+                    ],
+                })
+            STATE.results.append(entry)
 
     with STATE.lock:
         failed = [q for q in STATE.queue if q.get("status") == "failed"]
@@ -214,7 +246,8 @@ def _run_queue(items, interval, keep_video):
 def api_inspect(payload):
     source = payload.get("source", "")
     interval = payload.get("interval") or None
-    info = core.inspect_source(source, interval=interval)
+    mode = payload.get("mode") or "frames"
+    info = core.inspect_source(source, interval=interval, mode=mode)
     return info
 
 
@@ -228,6 +261,7 @@ def api_start(payload):
         raise core.ExtractError("There is nothing in the queue.")
     interval = payload.get("interval") or None
     keep_video = bool(payload.get("keep_video", True))
+    transcript = bool(payload.get("transcript", False))
 
     prepared = [
         {
@@ -235,6 +269,7 @@ def api_start(payload):
             "title": item.get("title") or item.get("source"),
             "thumbnail": item.get("thumbnail"),
             "kind": item.get("kind"),
+            "mode": item.get("mode") or "frames",
             "frame_count": item.get("frame_count"),
             "duration_pretty": item.get("duration_pretty"),
             "status": "waiting",
@@ -248,9 +283,11 @@ def api_start(payload):
         STATE.phase = "working"
         STATE.queue = prepared
         STATE.current = 0
+        STATE.transcript = transcript
     STATE.job = core.Job()
     STATE.worker = threading.Thread(
-        target=_run_queue, args=(prepared, interval, keep_video), daemon=True
+        target=_run_queue, args=(prepared, interval, keep_video, transcript),
+        daemon=True
     )
     STATE.worker.start()
     return {"ok": True}
@@ -285,9 +322,11 @@ def api_copy(payload):
     return {"ok": _clipboard_write(text)}
 
 
-def api_clipboard(_payload):
+def api_clipboard(payload):
     text = (_clipboard_read() or "").strip()
-    return {"text": text if core.is_youtube_url(text) else ""}
+    mode = payload.get("mode") or "frames"
+    is_match = core.is_download_url(text) if mode == "video" else core.is_youtube_url(text)
+    return {"text": text if is_match else ""}
 
 
 def api_pick_file(_payload):
@@ -321,6 +360,7 @@ def api_health(_payload):
         "missing_tools": core.missing_tools(),
         "out_root": str(OUT_ROOT),
         "has_picker": FILE_PICKER is not None,
+        "can_transcribe": core.whisper_available(),
     }
 
 

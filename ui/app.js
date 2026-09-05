@@ -16,12 +16,26 @@ const LADDER = [1, 2, 3, 5, 10, 30, 60];
 const TARGET_FRAMES = 30;
 
 const state = {
+  mode: "frames",           // "frames" | "video" - which mode new items are added as
   queue: [],
   polling: null,
   results: [],
   lightbox: { frames: [], index: 0 },
   clipboardOffered: "",
 };
+
+function setMode(mode) {
+  state.mode = mode;
+  $("mode-frames").classList.toggle("active", mode === "frames");
+  $("mode-video").classList.toggle("active", mode === "video");
+  $("url-input").placeholder = mode === "video"
+    ? "Paste a YouTube, Instagram, Facebook or TikTok link here…"
+    : "Paste a YouTube link here…";
+  $("go-left").hidden = mode === "video";
+  $("sidebar-foot").hidden = mode === "video";
+  if (state.hasPicker) $("pick-file").hidden = mode === "video";
+  renderQueue();
+}
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 async function api(path, payload) {
@@ -88,9 +102,7 @@ function renderQueue() {
   const forced = currentInterval();
 
   state.queue.forEach((item, index) => {
-    const interval = forced || chooseInterval(item.duration_seconds);
-    const frames = frameEstimate(item.duration_seconds, interval);
-
+    const isVideoMode = item.mode === "video";
     const row = el("div", "q-item");
 
     if (item.thumbnail) {
@@ -99,17 +111,24 @@ function renderQueue() {
       img.alt = "";
       row.append(img);
     } else {
-      row.append(el("div", "q-thumb placeholder", "🎞️"));
+      row.append(el("div", "q-thumb placeholder", isVideoMode ? "⬇️" : "🎞️"));
     }
 
     const info = el("div", "q-info");
     info.append(el("div", "q-title", item.title));
     const meta = el("div", "q-meta");
     meta.append(document.createTextNode(item.duration_pretty));
-    meta.append(el("span", "sep", "·"));
-    meta.append(document.createTextNode(`${frames} frames`));
-    meta.append(el("span", "sep", "·"));
-    meta.append(document.createTextNode(`one every ${interval}s`));
+    if (isVideoMode) {
+      meta.append(el("span", "sep", "·"));
+      meta.append(document.createTextNode("video only, no frames"));
+    } else {
+      const interval = forced || chooseInterval(item.duration_seconds);
+      const frames = frameEstimate(item.duration_seconds, interval);
+      meta.append(el("span", "sep", "·"));
+      meta.append(document.createTextNode(`${frames} frames`));
+      meta.append(el("span", "sep", "·"));
+      meta.append(document.createTextNode(`one every ${interval}s`));
+    }
     info.append(meta);
     row.append(info);
 
@@ -145,7 +164,7 @@ async function addSource(source) {
   $("add-btn").disabled = true;
   $("add-btn").textContent = "Looking…";
   try {
-    const info = await api("/api/inspect", { source, interval: currentInterval() });
+    const info = await api("/api/inspect", { source, interval: currentInterval(), mode: state.mode });
     state.queue.push(info);
     input.value = "";
     renderQueue();
@@ -180,6 +199,8 @@ function renderLiveQueue(snapshot) {
     info.append(el("div", "q-title", item.title));
     if (item.error) {
       info.append(el("div", "q-error", item.error));
+    } else if (item.mode === "video") {
+      info.append(el("div", "q-meta", `${item.duration_pretty || ""} · video only`));
     } else {
       info.append(el("div", "q-meta", `${item.duration_pretty || ""} · ${item.frame_count || "?"} frames`));
     }
@@ -201,22 +222,36 @@ function renderProgress(snapshot) {
     ? `video ${snapshot.current + 1} of ${snapshot.queue.length}`
     : "";
 
+  const videoMode = item.mode === "video";
+  const wantsScript = !!snapshot.transcript;
+  // How the bar is divided up depends on which stages this run actually has.
+  const span = videoMode
+    ? (wantsScript ? { download: 60, extract: 0,  transcribe: 37 }
+                   : { download: 90, extract: 0,  transcribe: 0 })
+    : (wantsScript ? { download: 35, extract: 35, transcribe: 27 }
+                   : { download: 45, extract: 52, transcribe: 0 });
+
   let percent = 0;
   let stageText = "Getting ready…";
 
   if (snapshot.stage === "download") {
-    percent = snapshot.percent * 0.45;
+    percent = snapshot.percent * (span.download / 100);
     stageText = `Downloading the video… ${Math.round(snapshot.percent)}%`;
   } else if (snapshot.stage === "extract") {
     const done = snapshot.frames_done;
     const total = snapshot.frames_total || 1;
-    percent = 45 + (done / total) * 52;
+    percent = span.download + (done / total) * span.extract;
     stageText = done === 0
       ? `Getting ready to grab ${total} frames…`
       : `Grabbing frames… ${done} of ${total}`;
+  } else if (snapshot.stage === "transcribe") {
+    percent = span.download + span.extract + (snapshot.percent / 100) * span.transcribe;
+    stageText = snapshot.percent < 1
+      ? "Warming up the transcriber…"
+      : `Listening for the script… ${Math.round(snapshot.percent)}%`;
   } else if (snapshot.stage === "saving") {
     percent = 98;
-    stageText = "Writing the manifest…";
+    stageText = videoMode ? "Saving the video…" : "Writing the manifest…";
   } else if (snapshot.stage === "metadata") {
     percent = 4;
     stageText = "Reading the video details…";
@@ -226,7 +261,7 @@ function renderProgress(snapshot) {
   $("work-stage").textContent = stageText;
 
   const dots = $("frame-dots");
-  const total = snapshot.frames_total || 0;
+  const total = videoMode ? 0 : (snapshot.frames_total || 0);
   if (dots.childElementCount !== total) {
     dots.textContent = "";
     for (let i = 0; i < total; i += 1) dots.append(el("i"));
@@ -282,13 +317,16 @@ async function start() {
       items: state.queue,
       interval: currentInterval(),
       keep_video: $("keep-video").checked,
+      transcript: $("want-transcript").checked,
     });
   } catch (error) {
     toast(error.message);
     return;
   }
   setMascot("working");
-  setGreeting("On it!", "Grabbing your frames. You can stop any time.");
+  setGreeting("On it!", $("want-transcript").checked
+    ? "Grabbing your frames and listening for the script. You can stop any time."
+    : "Grabbing your frames. You can stop any time.");
   showView("working");
   $("cancel-btn").disabled = false;
   $("cancel-btn").textContent = "Stop";
@@ -316,18 +354,35 @@ function renderResults(snapshot) {
   box.textContent = "";
 
   snapshot.results.forEach((result) => {
+    const isVideoMode = result.mode === "video";
     const card = el("div", "result-card");
 
     const head = el("div", "result-head");
     const left = el("div");
     left.append(el("div", "result-title", result.title));
     const meta = el("div", "result-meta");
-    meta.append(document.createTextNode(`${result.frame_count} frames`));
-    meta.append(el("span", "dot", "•"));
-    meta.append(document.createTextNode(`one every ${result.interval_seconds}s`));
-    meta.append(el("span", "dot", "•"));
-    meta.append(document.createTextNode(result.duration_pretty));
+    if (isVideoMode) {
+      meta.append(document.createTextNode("video downloaded"));
+      meta.append(el("span", "dot", "•"));
+      meta.append(document.createTextNode(result.duration_pretty));
+    } else {
+      meta.append(document.createTextNode(`${result.frame_count} frames`));
+      meta.append(el("span", "dot", "•"));
+      meta.append(document.createTextNode(`one every ${result.interval_seconds}s`));
+      meta.append(el("span", "dot", "•"));
+      meta.append(document.createTextNode(result.duration_pretty));
+    }
+    if (result.transcript) {
+      meta.append(el("span", "dot", "•"));
+      meta.append(document.createTextNode("🎙️ script included"));
+    } else if (result.transcript_error) {
+      meta.append(el("span", "dot", "•"));
+      meta.append(document.createTextNode("no script"));
+    }
     left.append(meta);
+    if (result.transcript_error) {
+      left.append(el("div", "result-note", result.transcript_error));
+    }
     head.append(left);
 
     const actions = el("div", "result-actions");
@@ -335,47 +390,70 @@ function renderResults(snapshot) {
     const openBtn = el("button", "btn btn-soft", "📂 Open folder");
     openBtn.onclick = () => api("/api/open", { path: result.folder })
       .catch((error) => toast(error.message));
+    actions.append(openBtn);
 
-    const copyBtn = el("button", "btn btn-soft", "📋 Copy for Claude");
-    copyBtn.onclick = async () => {
-      const text =
-        `Frames folder: ${result.folder}\n` +
-        `Manifest: ${result.manifest}\n` +
-        `${result.frame_count} frames, one every ${result.interval_seconds}s, ` +
-        `from "${result.title}" (${result.duration_pretty})`;
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch {
-        await api("/api/copy", { text });
-      }
-      toast("Copied — paste it into Claude");
-    };
+    if (result.transcript_txt) {
+      const scriptBtn = el("button", "btn btn-soft", "📝 Open script");
+      scriptBtn.onclick = () => api("/api/open", { path: result.transcript_txt })
+        .catch((error) => toast(error.message));
+      actions.append(scriptBtn);
+    }
 
-    actions.append(openBtn, copyBtn);
+    if (!isVideoMode) {
+      const copyBtn = el("button", "btn btn-soft", "📋 Copy for Claude");
+      copyBtn.onclick = async () => {
+        const text =
+          `Frames folder: ${result.folder}\n` +
+          `Manifest: ${result.manifest}\n` +
+          (result.transcript ? `Transcript: ${result.transcript}\n` : "") +
+          `${result.frame_count} frames, one every ${result.interval_seconds}s, ` +
+          `from "${result.title}" (${result.duration_pretty})` +
+          (result.transcript
+            ? ". transcript.json has the spoken words with start and end times "
+              + "in seconds, on the same clock as the frames."
+            : "");
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          await api("/api/copy", { text });
+        }
+        toast("Copied — paste it into Claude");
+      };
+      actions.append(copyBtn);
+    }
+
     head.append(actions);
     card.append(head);
 
-    const grid = el("div", "grid");
-    result.frames.forEach((frame, index) => {
-      const shot = el("button", "shot");
-      const img = el("img");
-      img.src = frame.url;
-      img.alt = `Frame at ${frame.label}`;
-      img.loading = "lazy";
-      shot.append(img, el("span", null, frame.label));
-      shot.onclick = () => openLightbox(result.frames, index);
-      grid.append(shot);
-    });
-    card.append(grid);
+    if (!isVideoMode) {
+      const grid = el("div", "grid");
+      result.frames.forEach((frame, index) => {
+        const shot = el("button", "shot");
+        const img = el("img");
+        img.src = frame.url;
+        img.alt = `Frame at ${frame.label}`;
+        img.loading = "lazy";
+        shot.append(img, el("span", null, frame.label));
+        shot.onclick = () => openLightbox(result.frames, index);
+        grid.append(shot);
+      });
+      card.append(grid);
+    }
     box.append(card);
   });
 
-  const total = snapshot.results.reduce((sum, r) => sum + r.frame_count, 0);
+  const total = snapshot.results.reduce((sum, r) => sum + (r.frame_count || 0), 0);
+  const videosOnly = snapshot.results.filter((r) => r.mode === "video").length;
+  const scripts = snapshot.results.filter((r) => r.transcript).length;
+  const scriptBit = scripts ? ` ${scripts} script${scripts > 1 ? "s" : ""} too.` : "";
   setMascot("done");
-  setGreeting(
-    "All done! 🎉",
-    total ? `${total} frames saved. Click any one to see it bigger.` : "Nothing came out of that."
-  );
+  if (total) {
+    setGreeting("All done! 🎉", `${total} frames saved.${scriptBit} Click any one to see it bigger.`);
+  } else if (videosOnly) {
+    setGreeting("All done! 🎉", `${videosOnly} video${videosOnly > 1 ? "s" : ""} downloaded.${scriptBit}`);
+  } else {
+    setGreeting("All done! 🎉", "Nothing came out of that.");
+  }
   showView("results");
   if (total) confetti();
 }
@@ -455,7 +533,7 @@ async function loadHistory() {
 /* ───────────────────────────── clipboard nudge ───────────────────────────── */
 async function offerClipboard() {
   try {
-    const { text } = await api("/api/clipboard", {});
+    const { text } = await api("/api/clipboard", { mode: state.mode });
     if (!text || text === state.clipboardOffered) return;
     if (state.queue.some((item) => item.source === text)) return;
     state.clipboardOffered = text;
@@ -469,6 +547,9 @@ async function offerClipboard() {
 
 /* ───────────────────────────── wiring ───────────────────────────── */
 function wire() {
+  $("mode-frames").onclick = () => setMode("frames");
+  $("mode-video").onclick = () => setMode("video");
+
   $("add-btn").onclick = () => addSource($("url-input").value.trim());
   $("url-input").addEventListener("keydown", (event) => {
     if (event.key === "Enter") addSource($("url-input").value.trim());
@@ -528,7 +609,18 @@ async function checkTools() {
       warning.hidden = false;
       setMascot("error");
     }
+    state.hasPicker = health.has_picker;
     if (!health.has_picker) $("pick-file").hidden = true;
+
+    state.canTranscribe = health.can_transcribe !== false;
+    if (!state.canTranscribe) {
+      $("want-transcript").checked = false;
+      $("want-transcript").disabled = true;
+      $("transcript-wrap").classList.add("off");
+      $("transcript-hint").textContent =
+        "Scripts need one extra install. Open a terminal and run:  pip install faster-whisper";
+      $("transcript-hint").hidden = false;
+    }
   } catch { /* not fatal */ }
 }
 

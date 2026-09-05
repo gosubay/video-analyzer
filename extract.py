@@ -2,7 +2,8 @@
 """
 Video Analyzer - command line.
 
-Usage:  python extract.py <youtube_url_or_video_file> [--interval N] [--outdir PATH] [--no-keep-video]
+Usage:  python extract.py <youtube_url_or_video_file> [--interval N] [--outdir PATH]
+                         [--no-keep-video] [--video-only] [--transcript]
 
 This is a thin wrapper. All the real work - and the locked spec for the interval
 ladder, folder naming, manifest schema and per-frame seeking - lives in core.py
@@ -20,7 +21,7 @@ def log(msg=""):
 
 
 def run(args):
-    state = {"stage": None, "last_pct": -1}
+    state = {"stage": None, "last_pct": -1, "last_tr": -1}
 
     def on_stage(stage, data):
         if stage == "download":
@@ -41,15 +42,37 @@ def run(args):
                 log(f"Extracting {total} frames...")
             else:
                 log(f"  extracting frame {done} of {total}...")
+        elif stage == "transcribe":
+            percent = data.get("percent", 0.0)
+            if state["stage"] != "transcribe":
+                state["stage"] = "transcribe"
+                log("")
+                log("Listening for the script...")
+            elif percent >= state["last_tr"] + 20:
+                state["last_tr"] = percent
+                log(f"  transcribing... {int(percent)}%")
         elif stage == "saving":
             log("  writing manifest...")
 
     log("Working...")
+
+    if args.video_only:
+        result = core.download_only(
+            args.source, out_root=args.outdir,
+            transcript=args.transcript, on_stage=on_stage,
+        )
+        log("")
+        log("Done. Video saved to:")
+        log(f"  {result['folder']}")
+        report_transcript(result)
+        return 0
+
     result = core.process(
         args.source,
         out_root=args.outdir,
         interval=args.interval,
         keep_video=args.keep_video,
+        transcript=args.transcript,
         on_stage=on_stage,
     )
 
@@ -57,7 +80,16 @@ def run(args):
     log(f"Done. {result['frame_count']} frames written to:")
     log(f"  {result['folder']}")
     log("  manifest: manifest.json")
+    report_transcript(result)
     return 0
+
+
+def report_transcript(result):
+    """One line about the script, whether it worked or not."""
+    if result.get("transcript"):
+        log(f"  transcript: {result['transcript']} (and transcript.txt)")
+    elif result.get("transcript_error"):
+        log(f"  no transcript: {result['transcript_error']}")
 
 
 def main():
@@ -80,6 +112,14 @@ def main():
     parser.add_argument(
         "--no-keep-video", dest="keep_video", action="store_false",
         help="Delete the downloaded video instead of saving it beside the frames.",
+    )
+    parser.add_argument(
+        "--video-only", action="store_true",
+        help="Just download the video - no frames. Also accepts Instagram, Facebook and TikTok links.",
+    )
+    parser.add_argument(
+        "--transcript", action="store_true",
+        help="Also write transcript.json and transcript.txt - the spoken words with timings.",
     )
     parser.set_defaults(keep_video=True)
     args = parser.parse_args()

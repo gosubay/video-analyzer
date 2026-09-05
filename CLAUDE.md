@@ -249,6 +249,129 @@ Two caveats that are not bugs:
 
 ---
 
+## Download-only mode (added 2026-08-25)
+
+### 16. "Just download the video"
+A second mode, chosen with a toggle at the top of the paste card, that
+downloads the video as-is and skips frame extraction entirely.
+
+- **Accepted links**: YouTube (same as frame mode) plus **Instagram, Facebook
+  and TikTok** — yt-dlp already supports all four, so no extra dependency.
+  Host allowlist lives in `core._DOWNLOAD_HOSTS`; validated by
+  `core.validate_download_url()`, kept separate from `validate_url()` so frame
+  extraction stays YouTube-only.
+- **Folder naming, sequence numbering and title-cleaning are unchanged** —
+  reuses `safe_title()` and `next_sequence_number()` so Recent history stays
+  one consistent list regardless of mode.
+- **Manifest is different on purpose**: `{"mode": "video_only", "video_id",
+  "title", "url", "uploader", "extracted_on", "duration_seconds",
+  "frame_width", "frame_height", "source_video"}`. No `frames` array, no
+  `interval_seconds`, no `frame_count` — a transcript matcher has nothing to
+  match against a video with no extracted frames.
+- **The "Keep the video file" checkbox does not apply to this mode** — the
+  whole point is the video, so it is always kept. The UI hides that checkbox
+  and the interval selector when this mode is active.
+- Implemented as `core.download_only()`, a sibling to `core.process()` — not
+  a branch inside it, because the frame-extraction path has cancellation and
+  cleanup logic (`extract_frames`, `plan_timestamps`) that download-only never
+  touches.
+- CLI: `python extract.py <link> --video-only`.
+- A queue can mix both modes in one run — each queued item carries its own
+  `mode`, decided by the toggle at the moment it was added.
+
+---
+
+## Transcripts (added 2026-09-05)
+
+### 17. "Also get the script"
+A checkbox in the setup view that adds a spoken-word transcript to a run. It
+works with **both** modes - frames and "just download the video" - because a
+transcript is almost always wanted *alongside* the frames, not instead of them.
+
+Decided by Galvin on 2026-09-05: model `medium`, a checkbox (not a third mode),
+and the model downloads on first use rather than shipping inside the .exe.
+
+**Engine: faster-whisper, model `medium`.**
+`faster-whisper` is the CTranslate2 build of OpenAI's Whisper. Chosen over
+YouTube's own auto-captions because auto-captions have no punctuation and no
+sentence boundaries, which makes them poor input for a vision+text analysis.
+
+**YouTube captions are the fallback, not the default.** If Whisper cannot run
+(library missing, or the model is not cached and there is no network), we fall
+back to yt-dlp's caption track so the run still produces something. The
+`source` field in `transcript.json` records which one was used.
+
+### 18. GPU, and the DLL trap
+`medium` runs on the GPU when one is usable, and falls back to CPU `int8`
+otherwise. Verified on Galvin's RTX 5060 Ti at ~10x realtime on a cold 19s clip
+(warm runs on longer videos are far faster).
+
+**The trap:** CTranslate2 loads `cublas64_12.dll` and cuDNN *lazily*, with a
+plain `LoadLibrary`. Those DLLs ship inside the `nvidia-cublas-cu12` and
+`nvidia-cudnn-cu12` pip packages, in `site-packages/nvidia/*/bin`, which is not
+on the DLL search path. Symptom is a load that appears to succeed followed by
+`RuntimeError: Library cublas64_12.dll is not found or cannot be loaded` at the
+first encode.
+
+`os.add_dll_directory()` does **not** fix it - a plain `LoadLibrary` ignores it.
+The fix is to prepend those folders to `os.environ["PATH"]` *before* the first
+transcribe, which is what `core._enable_cuda_dlls()` does. Do not "clean this
+up" into `add_dll_directory`; it was tried and it does not work.
+
+The model is loaded **once per process** and cached in `core._WHISPER_CACHE`, so
+a queue of ten videos pays the ~3 s load once.
+
+### 19. transcript.json
+Written into the run folder beside `manifest.json`. Same float discipline as the
+manifest, for the same reason - a matcher depends on it.
+
+```json
+{
+  "source": "whisper",
+  "model": "medium",
+  "device": "cuda",
+  "language": "en",
+  "duration_seconds": 19.014,
+  "segment_count": 2,
+  "text": "the whole transcript as one string",
+  "segments": [
+    { "index": 0, "start": 1.02, "end": 13.82, "text": "Alright, so here we are..." }
+  ]
+}
+```
+
+- `start` and `end` are **always JSON floats**, seconds from the start of the
+  video, never `MM:SS` and never strings. Enforced with `float(round(x, 2))`.
+- `index` is contiguous from 0.
+- `segments` is **segment-level, not word-level.** Whisper is still *run* with
+  `word_timestamps=True`, because that measurably improves where the segment
+  boundaries land, but the per-word list is discarded before writing. A 30
+  minute video at word level is a quarter of a megabyte of JSON and burns
+  context for no analytical gain.
+- `source` is `"whisper"` or `"captions"`. `device` is `"cuda"` or `"cpu"`.
+- UTF-8, `ensure_ascii=False`, like the manifest.
+
+`transcript.txt` is written next to it - the same content as `[M:SS] line`
+text, for reading and for pasting straight into a chat.
+
+`manifest.json` gains a `"transcript"` key: `"transcript.json"` when one was
+made, `null` when it was not. This is additive; every existing reader keeps
+working.
+
+### 20. Rules that must not drift
+- **Cancelling still leaves nothing behind.** Transcription happens *before*
+  the manifest is written, and a cancel during it deletes the part-finished
+  folder exactly like a cancel during frame extraction.
+- **A failed transcript never fails the run.** If Whisper falls over, the
+  frames are still correct and still worth keeping - the run finishes, the
+  manifest records `"transcript": null`, and the reason is put in
+  `"transcript_error"`. Losing 30 frames because the audio was silent would be
+  absurd.
+- **Frame timestamps and transcript timestamps are the same clock** - seconds
+  from the start of the same `source.mp4`. That is the whole point; nothing may
+  offset one and not the other.
+- CLI: `python extract.py <link> --transcript` (works with `--video-only` too).
+
 ## Dependencies
 - Python 3.13
 - `yt-dlp` (pip)
@@ -256,9 +379,11 @@ Two caveats that are not bugs:
 - FFmpeg — `ffmpeg` and `ffprobe` must both be on PATH. Called via `subprocess`,
   deliberately not the `ffmpeg-python` wrapper, to keep dependencies minimal.
 - Pillow (pip) — only to regenerate the icon, not needed to run anything
+- `faster-whisper` (pip) — only for transcripts. Pulls in `ctranslate2` and
+  `av`. For GPU also `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` (see 18).
+  Not needed for frames or plain downloads.
 
 ## Not built yet
-- Transcript generation (separate step, will be matched to these timestamps)
 - Sending frames to the vision API
 - Deleting individual frames from a finished run (deliberately skipped: it would
   renumber `index` and force a manifest rewrite, which risks the timestamp

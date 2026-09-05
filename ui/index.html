@@ -31,7 +31,7 @@
       <p class="empty-note">Nothing yet.<br>Your videos will show up here.</p>
     </div>
 
-    <div class="sidebar-foot">
+    <div class="sidebar-foot" id="sidebar-foot">
       <label class="check">
         <input type="checkbox" id="keep-video" checked>
         <span>Keep the video file</span>
@@ -115,6 +115,10 @@
     <section class="view" id="view-setup">
 
       <div class="card paste-card">
+        <div class="mode-toggle" id="mode-toggle">
+          <button class="mode-btn active" id="mode-frames" data-mode="frames">🎞️ Extract frames</button>
+          <button class="mode-btn" id="mode-video" data-mode="video">⬇️ Just download the video</button>
+        </div>
         <div class="paste-row">
           <input type="text" id="url-input" class="url-input" spellcheck="false"
                  placeholder="Paste a YouTube link here…" autocomplete="off">
@@ -158,7 +162,7 @@
       </div>
 
       <div class="card go-card" id="go-card" hidden>
-        <div class="go-left">
+        <div class="go-left" id="go-left">
           <label for="interval-select">A frame every</label>
           <select id="interval-select" class="select">
             <option value="">Auto — about 30 frames</option>
@@ -171,8 +175,13 @@
             <option value="60">60 seconds</option>
           </select>
         </div>
+        <label class="check go-check" id="transcript-wrap" title="Writes the spoken words with timings, next to everything else.">
+          <input type="checkbox" id="want-transcript">
+          <span>🎙️ Also get the script</span>
+        </label>
         <button class="btn btn-go" id="start-btn">Let's go ✨</button>
       </div>
+      <p class="hint go-hint" id="transcript-hint" hidden></p>
 
       <p class="tool-warning" id="tool-warning" hidden></p>
     </section>

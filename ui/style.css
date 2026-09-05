@@ -223,6 +223,18 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .paste-card { padding: 18px; }
+
+.mode-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+.mode-btn {
+  flex: 1; padding: 10px 14px; border-radius: var(--r);
+  font-weight: 800; font-size: 13px; text-align: center;
+  background: var(--cream-deep); color: var(--ink-soft);
+  border: 2px solid transparent;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.mode-btn:hover { background: var(--lav-soft); }
+.mode-btn.active { background: var(--lav-soft); color: var(--lav-deep); border-color: var(--lav); }
+
 .paste-row { display: flex; gap: 10px; }
 
 .url-input {
@@ -368,6 +380,13 @@ h1, h2, h3, p { margin: 0; }
   gap: 18px; padding: 16px 20px;
 }
 .go-left { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 14px; }
+
+/* "Also get the script" - sits in the go-card so it shows in BOTH modes,
+   unlike the interval selector and the keep-video box. */
+.go-check { margin-left: auto; margin-right: 4px; white-space: nowrap; }
+.go-check.off { opacity: .45; cursor: not-allowed; }
+.go-check.off input { cursor: not-allowed; }
+.go-hint { margin-top: 8px; text-align: right; }
 
 .select {
   background: var(--cream); border: 2.5px solid var(--line); border-radius: var(--r);
