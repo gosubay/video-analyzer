@@ -211,7 +211,9 @@ when the window will not open.
 
 ### 13. How it is packaged
 `build_exe.bat` -> PyInstaller (`VideoAnalyzer.spec`) -> `release/make_zip.py`.
-Output: `release/VideoAnalyzer-v1.0-windows.zip`, about 184 MB.
+Output: `release/VideoAnalyzer-v1.1-windows.zip`, about 278 MB (v1.0 was 184 MB;
+the difference is the transcript engine). The version number lives in
+`release/make_zip.py`. Published as a GitHub release on the private repo.
 
 **One-folder, never one-file.** A one-file build re-extracts ~450 MB of FFmpeg
 into a temp folder on every launch, which reads as a frozen app.
@@ -246,6 +248,30 @@ Two caveats that are not bugs:
 - **Edge WebView2** is required. Windows 11 always has it; a stale Windows 10
   might not. `app.py` checks the registry at startup and shows a message box
   with the Microsoft download link rather than failing silently.
+
+### 15a. Transcripts inside the release (added 2026-10-06)
+The shared .exe ships faster-whisper, **CPU only**.
+
+- The NVIDIA CUDA DLLs are **not** bundled: they are ~1.8 GB, which would push
+  the zip past what GitHub accepts for one release file (2 GB). A friend's PC
+  transcribes on the processor (`int8`); `core.transcribe()` already falls back
+  on its own. Running from source on Galvin's machine still uses the GPU.
+- The `medium` model (~1.5 GB) is **not** bundled either - it downloads on the
+  first transcript, per section 17. `release/README.txt` warns about the wait.
+- The spec uses `collect_data_files` + `collect_dynamic_libs` for
+  faster_whisper / ctranslate2 / onnxruntime / av / tokenizers. **Not
+  `collect_all`** - that pulled in transformers, cv2, llvmlite and pyarrow from
+  other projects on the build machine and produced a 1.2 GB folder.
+- `pkg_resources` must stay in `excludes` alongside `setuptools`. With only
+  setuptools excluded PyInstaller still adds its pkg_resources startup hook and
+  the exe dies at launch with `No module named 'jaraco'`.
+- **Close every running `Video Analyzer.exe` before rebuilding.** A running copy
+  locks `dist/`, the build stops half-way without an obvious error, and the
+  result fails with `No module named 'encodings'`.
+
+Verified 2026-10-06 on the built exe with FFmpeg and Python stripped from PATH
+and an empty model cache: frames + transcript (model downloaded, `device: cpu`)
+and download-only + transcript both completed.
 
 ---
 

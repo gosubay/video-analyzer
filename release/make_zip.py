@@ -11,7 +11,7 @@ import time
 import zipfile
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 HERE = Path(__file__).parent.resolve()
 ROOT = HERE.parent

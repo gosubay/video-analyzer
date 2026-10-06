@@ -1,6 +1,7 @@
 ===============================================================
   VIDEO ANALYZER
   Turn a YouTube link into screenshots with the time on each one
+  Version 1.1
 ===============================================================
 
 WHAT IT DOES
@@ -39,6 +40,30 @@ HOW TO USE IT
 The app stays open. Press "Do another one" and go again.
 
 
+TWO EXTRAS (new in version 1.1)
+-------------------------------
+JUST DOWNLOAD THE VIDEO
+   At the top of the box where you paste the link there is a
+   switch. Flip it to "Just download the video" and you get the
+   video file only, no screenshots. In this mode it also accepts
+   Instagram, Facebook and TikTok links, not only YouTube.
+
+ALSO GET THE SCRIPT
+   Tick "Also get the script" before pressing "Let's go" and it
+   writes down everything that is said in the video, with the
+   time next to each line. You get "transcript.txt" to read and
+   "transcript.json" for feeding to an AI.
+
+   Two things to expect:
+   - The FIRST time you tick it, the app downloads its listening
+     model - about 1.5 GB, once only. The bar will sit on
+     "Warming up the transcriber" for a few minutes. It has not
+     frozen. After that first time it starts straight away.
+   - It does the listening on your computer's processor, so a
+     long video takes a while - very roughly as long as the video
+     itself on an ordinary laptop. Short clips take seconds.
+
+
 WHERE DO THE PICTURES GO?
 -------------------------
 Into a "frames" folder right next to Video Analyzer.exe.
@@ -54,7 +79,9 @@ Documents is fine. Don't run it from inside the zip file.
 
 DO I NEED TO INSTALL ANYTHING?
 ------------------------------
-No. Everything it needs is inside this folder.
+No. Everything it needs is inside this folder. (The one thing
+it fetches by itself is the listening model for scripts - see
+above - and only if you tick that box.)
 
 The one exception, and it is rare: if you are on an older Windows
 10 machine you may see a message asking for the "Microsoft Edge

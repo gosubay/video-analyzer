@@ -1,5 +1,5 @@
 # HANDOFF — Video Analyzer
-Updated: 2026-09-05 SGT (session 3 - transcripts)
+Updated: 2026-10-06 SGT (session 4 - v1.1 release rebuilt and published)
 
 ## What this project is
 A Windows app that takes a YouTube link, downloads the video, and saves
@@ -118,9 +118,11 @@ back to the site's own captions.
    with the `transcript.json` segment whose `start`/`end` covers its timestamp.
    Both files are now in the same folder with the same clock, so this is a
    merge, not a matching problem.
-6. Rebuild the .exe - the release predates both download-only and transcripts.
-   Decide there whether to ship faster-whisper in it (adds ~1 GB) or leave the
-   shared build on captions only.
+6. ~~Rebuild the .exe~~ **done 2026-10-06.** v1.1 includes download-only and
+   transcripts (CPU only, model downloads on first use - CLAUDE.md 15a). Built
+   exe tested end to end. Zip is `release/VideoAnalyzer-v1.1-windows.zip`
+   (278 MB), published as GitHub release `v1.1` on the private repo - friends
+   need a repo invite to download it, or Galvin sends the zip directly.
 
 ## Decisions made this session (don't re-litigate)
 - Interval ladder `1 2 3 5 10 30 60`, smallest value keeping the video ≤30 frames —
