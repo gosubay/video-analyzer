@@ -211,25 +211,12 @@ def _host_of(url):
 
 
 def validate_url(url):
-    url = str(url or "").strip()
-    if not re.match(r"^https?://", url, re.I):
-        url = "https://" + url
-    host = _host_of(url)
-    allowed = ("youtube.com", "youtu.be", "youtube-nocookie.com")
-    if not any(host == d or host.endswith("." + d) for d in allowed):
-        raise ExtractError(
-            f"That does not look like a YouTube link (host: {host or 'none'}). "
-            f"Expected something like https://www.youtube.com/watch?v=XXXXXXXXXXX"
-        )
-    return url
+    """Frame extraction accepts the same four sites as download-only mode."""
+    return validate_download_url(url)
 
 
 def validate_download_url(url):
-    """
-    Same idea as validate_url but for 'just download the video' mode, which
-    also accepts Instagram, Facebook and TikTok links. Frame extraction stays
-    YouTube-only - see CLAUDE.md section 16.
-    """
+    """Accepts YouTube, Instagram, Facebook and TikTok links."""
     url = str(url or "").strip()
     if not re.match(r"^https?://", url, re.I):
         url = "https://" + url
@@ -269,7 +256,7 @@ def friendly_download_error(raw):
         ("sign in to confirm your age", "That video is age-restricted and cannot be downloaded without signing in."),
         ("age-restricted", "That video is age-restricted and cannot be downloaded without signing in."),
         ("not available in your country", "That video is blocked in your country."),
-        ("confirm you", "YouTube is asking for a bot check. Try again shortly, or use browser cookies."),
+        ("not a bot", "YouTube is asking for a bot check. Try again shortly, or use browser cookies."),
         ("is not a valid url", "That is not a valid URL."),
         ("unsupported url", "That link is not a video page."),
         ("incomplete youtube id", "That YouTube link looks truncated - check you copied the whole URL."),

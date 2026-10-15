@@ -30,7 +30,7 @@ function setMode(mode) {
   $("mode-video").classList.toggle("active", mode === "video");
   $("url-input").placeholder = mode === "video"
     ? "Paste a YouTube, Instagram, Facebook or TikTok link here…"
-    : "Paste a YouTube link here…";
+    : "Paste a YouTube, Instagram, Facebook or TikTok link here…";
   $("go-left").hidden = mode === "video";
   $("sidebar-foot").hidden = mode === "video";
   if (state.hasPicker) $("pick-file").hidden = mode === "video";
@@ -575,7 +575,7 @@ function wire() {
   $("again-btn").onclick = () => {
     setMascot("idle");
     setGreeting("Hello! Give me a video.",
-      "Paste a YouTube link and I'll grab evenly spaced frames with the exact time on every one.");
+      "Paste a video link and I'll grab evenly spaced frames with the exact time on every one.");
     showView("setup");
     $("url-input").focus();
     offerClipboard();

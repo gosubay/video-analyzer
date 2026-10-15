@@ -284,8 +284,8 @@ downloads the video as-is and skips frame extraction entirely.
 - **Accepted links**: YouTube (same as frame mode) plus **Instagram, Facebook
   and TikTok** — yt-dlp already supports all four, so no extra dependency.
   Host allowlist lives in `core._DOWNLOAD_HOSTS`; validated by
-  `core.validate_download_url()`, kept separate from `validate_url()` so frame
-  extraction stays YouTube-only.
+  `core.validate_download_url()`. Since 2026-10-15 `validate_url()` (frame
+  extraction) accepts the same four sites - it just calls the download validator.
 - **Folder naming, sequence numbering and title-cleaning are unchanged** —
   reuses `safe_title()` and `next_sequence_number()` so Recent history stays
   one consistent list regardless of mode.
