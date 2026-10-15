@@ -400,7 +400,8 @@ working.
 
 ## Dependencies
 - Python 3.13
-- `yt-dlp` (pip)
+- `yt-dlp[curl-cffi]` (pip) - the `curl-cffi` extra is REQUIRED for TikTok: without it
+  TikTok answers "Unexpected response from webpage request". Fixed 2026-10-15.
 - `pywebview` (pip) — only needed for the app window, not the CLI
 - FFmpeg — `ffmpeg` and `ffprobe` must both be on PATH. Called via `subprocess`,
   deliberately not the `ffmpeg-python` wrapper, to keep dependencies minimal.

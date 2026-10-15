@@ -67,10 +67,11 @@ hiddenimports = [
 # built app transcribes on the CPU; core.transcribe() falls back by itself.
 # The Whisper model is not shipped either, it downloads on first use.
 binaries = []
-for package in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers"):
+# curl_cffi lets yt-dlp impersonate a browser - TikTok rejects it without that.
+for package in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", "curl_cffi"):
     datas += collect_data_files(package)
     binaries += collect_dynamic_libs(package)
-hiddenimports += ["faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers"]
+hiddenimports += ["faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", "curl_cffi"]
 
 excludes = [
     "tkinter", "matplotlib", "pandas", "scipy", "PIL",
