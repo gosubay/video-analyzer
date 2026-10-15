@@ -383,9 +383,11 @@ def inspect_source(source, interval=None, mode="frames"):
             meta = entries[0]
 
         duration = meta.get("duration")
-        if not duration:
-            raise ExtractError("That video has no duration - it may be a livestream.")
-        duration = float(duration)
+        if not duration and meta.get("is_live"):
+            raise ExtractError("That is a livestream - wait until it has finished.")
+        # Instagram and some TikToks do not report a length before download.
+        # Treat it as unknown here; process() measures it with ffprobe.
+        duration = float(duration) if duration else None
         info = {
             "kind": "video" if video_only else "youtube",
             "mode": mode,
@@ -396,6 +398,16 @@ def inspect_source(source, interval=None, mode="frames"):
             "thumbnail": meta.get("thumbnail"),
             "url": meta.get("webpage_url") or url,
         }
+
+    if duration is None:
+        info.update({
+            "duration_seconds": None,
+            "duration_pretty": "length unknown",
+            "interval_seconds": None,
+            "interval_auto": not bool(interval),
+            "frame_count": None,
+        })
+        return info
 
     if video_only:
         info.update({

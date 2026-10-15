@@ -121,6 +121,9 @@ function renderQueue() {
     if (isVideoMode) {
       meta.append(el("span", "sep", "·"));
       meta.append(document.createTextNode("video only, no frames"));
+    } else if (!item.duration_seconds) {
+      meta.append(el("span", "sep", "·"));
+      meta.append(document.createTextNode("frame count set after download"));
     } else {
       const interval = forced || chooseInterval(item.duration_seconds);
       const frames = frameEstimate(item.duration_seconds, interval);
