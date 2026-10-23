@@ -224,6 +224,17 @@ back to the site's own captions.
 - Bash heredocs in this environment mangle backslash escapes. Editing `ui/app.js`
   (full of `\n` inside template literals) by heredoc silently fails to match.
   Write the edit script to a real file and run that instead.
+- **WeChat Channels (微信视频号) links cannot be downloaded** (checked
+  2026-10-23). `weixin.qq.com/sph/<id>` redirects to
+  `channels.weixin.qq.com/finder-preview/pages/sph?id=<id>`, which shows only
+  the cover image, caption and a "scan with WeChat" QR code. Its one API call
+  (`finder-preview/api/feed/get_feed_info`) returns no video URL, and yt-dlp
+  has no extractor. The only known route is intercepting the WeChat desktop
+  client with a local HTTPS proxy + installed root certificate, then
+  decrypting the file - not built: fragile, and unsafe to ship to friends.
+  Workaround: get the video file some other way and feed it in as a local file.
+- TikTok has worked since `9883518` (needs `yt-dlp[curl-cffi]`); re-verified
+  2026-10-23 with a full frames run.
 - Videos over 30 minutes produce more than 30 frames (60s is the top of the
   ladder). Accepted — Galvin said he mostly analyses short videos. A `--max-frames`
   cap is the obvious fix if that ever bites.
